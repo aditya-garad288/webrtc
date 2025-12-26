@@ -6,6 +6,8 @@ import "./Lobby.css";
 const LobbyScreen = () => {
   const [email, setEmail] = useState("");
   const [room, setRoom] = useState("");
+  const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
 
   const socket = useSocket();
   const navigate = useNavigate();
@@ -13,15 +15,17 @@ const LobbyScreen = () => {
   const handleSubmitForm = useCallback(
     (e) => {
       e.preventDefault();
-      socket.emit("room:join", { email, room });
+      setLoading(true);
+      socket.emit("room:join", { email, room, name });
     },
-    [email, room, socket]
+    [email, room, name, socket]
   );
 
   const handleJoinRoom = useCallback(
     (data) => {
-      const { email, room } = data;
-      navigate(`/room/${room}`);
+      const { email, room, name } = data;
+      setLoading(false);
+      navigate(`/room/${room}`, { state: { email, name } });
     },
     [navigate]
   );
@@ -42,6 +46,21 @@ const LobbyScreen = () => {
         </div>
 
         <form onSubmit={handleSubmitForm} className="lobby-form">
+          <div className="form-group">
+            <label htmlFor="name" className="form-label">
+              👤 Display Name
+            </label>
+            <input
+              type="text"
+              id="name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Your Name"
+              required
+              className="form-input"
+            />
+          </div>
+
           <div className="form-group">
             <label htmlFor="email" className="form-label">
               📧 Email Address
@@ -72,9 +91,15 @@ const LobbyScreen = () => {
             />
           </div>
 
-          <button type="submit" className="join-button">
-            <span>Join Room</span>
-            <span className="arrow">→</span>
+          <button type="submit" className="join-button" disabled={loading}>
+            {loading ? (
+              <span>⏳ Joining...</span>
+            ) : (
+              <>
+                <span>Join Room</span>
+                <span className="arrow">→</span>
+              </>
+            )}
           </button>
         </form>
 

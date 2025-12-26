@@ -23,16 +23,16 @@ const socketidToEmailMap = new Map();
 io.on("connection", (socket) => {
   console.log(`Socket Connected`, socket.id);
   socket.on("room:join", (data) => {
-    const { email, room } = data;
+    const { email, room, name } = data;
     emailToSocketIdMap.set(email, socket.id);
     socketidToEmailMap.set(socket.id, email);
-    io.to(room).emit("user:joined", { email, id: socket.id });
+    io.to(room).emit("user:joined", { email, id: socket.id, name });
     socket.join(room);
     io.to(socket.id).emit("room:join", data);
   });
 
-  socket.on("user:welcome", ({ to, email }) => {
-    io.to(to).emit("user:welcome", { from: socket.id, email });
+  socket.on("user:welcome", ({ to, email, name }) => {
+    io.to(to).emit("user:welcome", { from: socket.id, email, name });
   });
 
   socket.on("user:call", ({ to, offer }) => {
@@ -56,6 +56,17 @@ io.on("connection", (socket) => {
 
   socket.on("peer:ice-candidate", ({ to, candidate }) => {
     io.to(to).emit("peer:ice-candidate", { from: socket.id, candidate });
+  });
+
+  socket.on("call:ended", ({ to }) => {
+    io.to(to).emit("call:ended", { from: socket.id });
+  });
+
+  socket.on("disconnecting", () => {
+    const rooms = [...socket.rooms];
+    rooms.forEach((room) => {
+      socket.in(room).emit("user:left", { id: socket.id });
+    });
   });
 });
 
