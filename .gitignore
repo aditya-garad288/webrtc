@@ -7,3 +7,13 @@ dist/
 npm-debug.log*
 .DS_Store
 Thumbs.db
+*.log
+GEMINI.md
+SESSION.md
+server/server.pfx
+client/client.err.log
+client/client.out.log
+server/server.err.log
+server/server.out.log
+server/server.log
+server_err.log

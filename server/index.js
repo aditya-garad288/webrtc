@@ -1,7 +1,20 @@
 const { Server } = require("socket.io");
+const https = require("https");
+const fs = require("fs");
 
-const io = new Server(8000, {
-  cors: true,
+// Load the self-signed certificate
+const options = {
+  pfx: fs.readFileSync("server.pfx"),
+  passphrase: "password"
+};
+
+const httpServer = https.createServer(options);
+
+const io = new Server(httpServer, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
 });
 
 const emailToSocketIdMap = new Map();
@@ -18,7 +31,12 @@ io.on("connection", (socket) => {
     io.to(socket.id).emit("room:join", data);
   });
 
+  socket.on("user:welcome", ({ to, email }) => {
+    io.to(to).emit("user:welcome", { from: socket.id, email });
+  });
+
   socket.on("user:call", ({ to, offer }) => {
+    console.log(`Call from ${socket.id} to ${to}`);
     io.to(to).emit("incomming:call", { from: socket.id, offer });
   });
 
@@ -35,4 +53,12 @@ io.on("connection", (socket) => {
     console.log("peer:nego:done", ans);
     io.to(to).emit("peer:nego:final", { from: socket.id, ans });
   });
+
+  socket.on("peer:ice-candidate", ({ to, candidate }) => {
+    io.to(to).emit("peer:ice-candidate", { from: socket.id, candidate });
+  });
+});
+
+httpServer.listen(8000, () => {
+  console.log("Secure Socket Server running on port 8000");
 });
