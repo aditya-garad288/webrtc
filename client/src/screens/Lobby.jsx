@@ -30,12 +30,19 @@ const LobbyScreen = () => {
     [navigate]
   );
 
+  const handleRoomFull = useCallback(({ room }) => {
+    setLoading(false);
+    alert(`Room ${room} is full (max 4 users). Please try another room.`);
+  }, []);
+
   useEffect(() => {
     socket.on("room:join", handleJoinRoom);
+    socket.on("room:full", handleRoomFull);
     return () => {
       socket.off("room:join", handleJoinRoom);
+      socket.off("room:full", handleRoomFull);
     };
-  }, [socket, handleJoinRoom]);
+  }, [socket, handleJoinRoom, handleRoomFull]);
 
   return (
     <div className="lobby-container">

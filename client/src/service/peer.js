@@ -1,7 +1,12 @@
 class PeerService {
   constructor() {
-    if (!this.peer) {
-      this.peer = new RTCPeerConnection({
+    this.peers = new Map(); // socketId -> { peer: RTCPeerConnection, iceQueue: [] }
+  }
+
+  // Helper to create or get an existing peer connection container
+  _getPeerEntry(id) {
+    if (!this.peers.has(id)) {
+      const peer = new RTCPeerConnection({
         iceServers: [
           {
             urls: [
@@ -11,71 +16,80 @@ class PeerService {
           },
         ],
       });
-      this.iceCandidateQueue = [];
+      this.peers.set(id, { peer, iceQueue: [] });
+    }
+    return this.peers.get(id);
+  }
+
+  getPeer(id) {
+    return this._getPeerEntry(id).peer;
+  }
+
+  async getAnswer(id, offer) {
+    const entry = this._getPeerEntry(id);
+    const peer = entry.peer;
+    
+    await peer.setRemoteDescription(offer);
+    await this.processIceQueue(id); // Fixed: await queue processing
+    const ans = await peer.createAnswer();
+    await peer.setLocalDescription(new RTCSessionDescription(ans));
+    return ans;
+  }
+
+  async setRemoteDescription(id, ans) {
+    const entry = this._getPeerEntry(id);
+    const peer = entry.peer;
+    
+    await peer.setRemoteDescription(new RTCSessionDescription(ans));
+    await this.processIceQueue(id); // Fixed: await queue processing
+  }
+
+  async addIceCandidate(id, candidate) {
+    const entry = this._getPeerEntry(id);
+    const peer = entry.peer;
+
+    if (peer.remoteDescription) {
+      await peer.addIceCandidate(candidate);
+    } else {
+      entry.iceQueue.push(candidate);
     }
   }
 
-  async getAnswer(offer) {
-    if (this.peer) {
-      await this.peer.setRemoteDescription(offer);
-      this.processIceQueue();
-      const ans = await this.peer.createAnswer();
-      await this.peer.setLocalDescription(new RTCSessionDescription(ans));
-      return ans;
-    }
-  }
-
-  async setRemoteDescription(ans) {
-    if (this.peer) {
-      await this.peer.setRemoteDescription(new RTCSessionDescription(ans));
-      this.processIceQueue();
-    }
-  }
-
-  async addIceCandidate(candidate) {
-    if (this.peer) {
-      if (this.peer.remoteDescription) {
-        await this.peer.addIceCandidate(candidate);
-      } else {
-        this.iceCandidateQueue.push(candidate);
-      }
-    }
-  }
-
-  async processIceQueue() {
-    while (this.iceCandidateQueue.length > 0) {
-      const candidate = this.iceCandidateQueue.shift();
+  async processIceQueue(id) {
+    const entry = this.peers.get(id);
+    if (!entry) return;
+    
+    while (entry.iceQueue.length > 0) {
+      const candidate = entry.iceQueue.shift();
       try {
-        await this.peer.addIceCandidate(candidate);
+        await entry.peer.addIceCandidate(candidate);
       } catch (e) {
-        console.error("Error adding queued ice candidate", e);
+        console.error("Error adding queued ice candidate for " + id, e);
       }
     }
   }
 
-  async getOffer() {
-    if (this.peer) {
-      const offer = await this.peer.createOffer();
-      await this.peer.setLocalDescription(new RTCSessionDescription(offer));
-      return offer;
-    }
+  async getOffer(id) {
+    const entry = this._getPeerEntry(id);
+    const peer = entry.peer;
+
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(new RTCSessionDescription(offer));
+    return offer;
   }
 
   reset() {
-    if (this.peer) {
-      this.peer.close();
-      this.peer = new RTCPeerConnection({
-        iceServers: [
-          {
-            urls: [
-              "stun:stun.l.google.com:19302",
-              "stun:global.stun.twilio.com:3478",
-            ],
-          },
-        ],
-      });
-      this.iceCandidateQueue = [];
-    }
+    this.peers.forEach((entry) => {
+      entry.peer.close();
+    });
+    this.peers.clear();
+  }
+  
+  removePeer(id) {
+      if(this.peers.has(id)){
+          this.peers.get(id).peer.close();
+          this.peers.delete(id);
+      }
   }
 }
 

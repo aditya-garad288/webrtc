@@ -14,13 +14,10 @@ const RoomPage = () => {
   const myEmail = location.state?.email || "guest@example.com";
   const myName = location.state?.name || "Guest";
 
-  const [remoteSocketId, setRemoteSocketId] = useState(null);
-  const [remoteName, setRemoteName] = useState(null);
+  const [remoteUsers, setRemoteUsers] = useState([]); // Array of { id, name, stream }
   const [myStream, setMyStream] = useState();
-  const [remoteStream, setRemoteStream] = useState();
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
-  const [peerConnection, setPeerConnection] = useState(peer.peer); // Track the current peer connection instance
 
   useEffect(() => {
     const startMyStream = async () => {
@@ -37,198 +34,158 @@ const RoomPage = () => {
     startMyStream();
   }, []);
 
-  const handleCallUser = useCallback(async (targetId) => {
-    const id = targetId || remoteSocketId;
-    console.log("Starting call...", { id });
-    if (!id) {
-      console.warn("Cannot call: No remote socket ID");
-      return;
-    }
-    try {
-      // Stream is already acquired in useEffect
-      if (myStream) {
-        // Add tracks to the peer connection
-        myStream.getTracks().forEach((track) => {
-           // Use peerConnection from state to ensure we check the right one
-           const senders = peerConnection.getSenders();
-           const trackAlreadyAdded = senders.some(sender => sender.track === track);
-           if (!trackAlreadyAdded) {
-             peerConnection.addTrack(track, myStream);
-             console.log("Added track to peer:", track.kind);
-           }
+  const updateRemoteUserStream = (id, stream) => {
+    setRemoteUsers((prev) => {
+      const existing = prev.find((u) => u.id === id);
+      if (existing) {
+        return prev.map((u) => (u.id === id ? { ...u, stream } : u));
+      }
+      return [...prev, { id, stream, name: "User " + id.substr(0, 4) }];
+    });
+  };
+
+  const setupPeerConnection = useCallback((id) => {
+    const connection = peer.getPeer(id);
+
+    // Handle Negotiation Needed
+    const handleNegoNeeded = async () => {
+      if (connection.signalingState !== "stable") {
+        return;
+      }
+      const offer = await peer.getOffer(id);
+      socket.emit("peer:nego:needed", { offer, to: id });
+    };
+
+    // Handle ICE Candidates
+    const handleIceCandidate = (event) => {
+      if (event.candidate) {
+        socket.emit("peer:ice-candidate", {
+          to: id,
+          candidate: event.candidate,
         });
       }
+    };
 
-      const offer = await peer.getOffer();
-      console.log("Offer created:", offer);
-      socket.emit("user:call", { to: id, offer });
-    } catch (err) {
-      console.error("Error during call start:", err);
+    // Handle Tracks (Remote Stream)
+    const handleTrack = (ev) => {
+      const remoteStream = ev.streams[0];
+      console.log(`GOT TRACKS from ${id}!!`);
+      updateRemoteUserStream(id, remoteStream);
+    };
+
+    connection.onnegotiationneeded = handleNegoNeeded;
+    connection.onicecandidate = handleIceCandidate;
+    connection.ontrack = handleTrack;
+
+    // Add local tracks if available
+    if (myStream) {
+      myStream.getTracks().forEach((track) => {
+        const senders = connection.getSenders();
+        const trackAlreadyAdded = senders.some((sender) => sender.track === track);
+        if (!trackAlreadyAdded) {
+          connection.addTrack(track, myStream);
+        }
+      });
     }
-  }, [remoteSocketId, socket, myStream, peerConnection]);
+  }, [socket, myStream]);
+
+  const handleCallUser = useCallback(async (targetId) => {
+    console.log("Starting call to", targetId);
+    setupPeerConnection(targetId);
+    const offer = await peer.getOffer(targetId);
+    socket.emit("user:call", { to: targetId, offer });
+  }, [setupPeerConnection, socket]);
 
   const handleUserJoined = useCallback(({ email, id, name }) => {
     console.log(`User ${name} (${email}) joined room`);
-    setRemoteSocketId(id);
-    setRemoteName(name); // Store remote user's name
+    // Add to remote users list with name (stream will come later)
+    setRemoteUsers((prev) => {
+      if (!prev.find((u) => u.id === id)) {
+        return [...prev, { id, name, stream: null }];
+      }
+      return prev;
+    });
+    
     socket.emit("user:welcome", { to: id, email: myEmail, name: myName });
-    // Auto-start call
     handleCallUser(id);
   }, [socket, myEmail, myName, handleCallUser]);
 
   const handleWelcome = useCallback(({ from, email, name }) => {
     console.log(`Welcome from ${name} (${email})`);
-    setRemoteSocketId(from);
-    setRemoteName(name); // Store remote user's name
+    setRemoteUsers((prev) => {
+      if (!prev.find((u) => u.id === from)) {
+        return [...prev, { id: from, name, stream: null }];
+      }
+      return prev;
+    });
   }, []);
-
-  // Ensure tracks are added whenever stream is ready (handles late getUserMedia)
-  useEffect(() => {
-    if (myStream) {
-      myStream.getTracks().forEach((track) => {
-        const senders = peerConnection.getSenders();
-        const trackAlreadyAdded = senders.some(sender => sender.track === track);
-        if (!trackAlreadyAdded) {
-          peerConnection.addTrack(track, myStream);
-          console.log("Auto-added track to peer:", track.kind);
-        }
-      });
-    }
-  }, [myStream, peerConnection]);
 
   const handleIncommingCall = useCallback(
     async ({ from, offer }) => {
-      setRemoteSocketId(from);
-      console.log(`Incoming Call`, from, offer);
-      try {
-        if (myStream) {
-           myStream.getTracks().forEach((track) => {
-             const senders = peerConnection.getSenders();
-             const trackAlreadyAdded = senders.some(sender => sender.track === track);
-             if (!trackAlreadyAdded) {
-               peerConnection.addTrack(track, myStream);
-             }
-           });
-        }
-
-        const ans = await peer.getAnswer(offer);
-        socket.emit("call:accepted", { to: from, ans });
-      } catch (err) {
-        console.error("Error during incoming call handling:", err);
-      }
+      console.log(`Incoming Call from ${from}`);
+      setupPeerConnection(from);
+      const ans = await peer.getAnswer(from, offer);
+      socket.emit("call:accepted", { to: from, ans });
     },
-    [socket, myStream, peerConnection]
+    [socket, setupPeerConnection]
   );
-
-  const sendStreams = useCallback(() => {
-    if (!myStream) return;
-    for (const track of myStream.getTracks()) {
-      const senders = peerConnection.getSenders();
-      const trackAlreadyAdded = senders.some(sender => sender.track === track);
-      
-      if (!trackAlreadyAdded) {
-        peerConnection.addTrack(track, myStream);
-        console.log("Track added:", track.kind);
-      }
-    }
-  }, [myStream, peerConnection]);
 
   const handleCallAccepted = useCallback(
-    ({ from, ans }) => {
-      peer.setRemoteDescription(ans);
-      console.log("Call Accepted!");
-      sendStreams();
+    async ({ from, ans }) => {
+      console.log("Call Accepted by", from);
+      await peer.setRemoteDescription(from, ans);
+      // Wait for tracks? They come via 'ontrack'
     },
-    [sendStreams]
+    []
   );
-
-  const handleIceCandidate = useCallback((event) => {
-    if (event.candidate) {
-      socket.emit("peer:ice-candidate", {
-        to: remoteSocketId,
-        candidate: event.candidate,
-      });
-    }
-  }, [remoteSocketId, socket]);
-
-  const handleIncomingIceCandidate = useCallback(async ({ candidate }) => {
-    try {
-      if (candidate) {
-        await peer.addIceCandidate(candidate);
-      }
-    } catch (e) {
-      console.error("Error adding ice candidate", e);
-    }
-  }, []);
-
-  const handleNegoNeeded = useCallback(async () => {
-    if (!remoteSocketId) return;
-    const offer = await peer.getOffer();
-    socket.emit("peer:nego:needed", { offer, to: remoteSocketId });
-  }, [remoteSocketId, socket]);
-
-  useEffect(() => {
-    peerConnection.addEventListener("negotiationneeded", handleNegoNeeded);
-    peerConnection.addEventListener("icecandidate", handleIceCandidate);
-    return () => {
-      peerConnection.removeEventListener("negotiationneeded", handleNegoNeeded);
-      peerConnection.removeEventListener("icecandidate", handleIceCandidate);
-    };
-  }, [handleNegoNeeded, handleIceCandidate, peerConnection]);
 
   const handleNegoNeedIncomming = useCallback(
     async ({ from, offer }) => {
-      const ans = await peer.getAnswer(offer);
+      const ans = await peer.getAnswer(from, offer);
       socket.emit("peer:nego:done", { to: from, ans });
     },
     [socket]
   );
 
-  const handleNegoNeedFinal = useCallback(async ({ ans }) => {
-    await peer.setRemoteDescription(ans);
+  const handleNegoNeedFinal = useCallback(async ({ from, ans }) => {
+    await peer.setRemoteDescription(from, ans);
   }, []);
 
-  useEffect(() => {
-    peerConnection.addEventListener("track", async (ev) => {
-      const remoteStream = ev.streams;
-      console.log("GOT TRACKS!!");
-      setRemoteStream(remoteStream[0]);
-    });
-  }, [peerConnection]);
+  const handleIncomingIceCandidate = useCallback(async ({ from, candidate }) => {
+    try {
+      await peer.addIceCandidate(from, candidate);
+    } catch (e) {
+      console.error("Error adding ice candidate", e);
+    }
+  }, []);
+
+  const handleCallEnded = useCallback((data) => {
+    const from = data.from || data.id;
+    console.log(`Call ended by ${from}`);
+    if (from) {
+      peer.removePeer(from);
+      setRemoteUsers((prev) => prev.filter((u) => u.id !== from));
+    }
+  }, []);
 
   const handleEndCall = useCallback(() => {
-    // Notify remote user
-    if (remoteSocketId) {
-      socket.emit("call:ended", { to: remoteSocketId });
-    }
+    // Notify all remote users
+    remoteUsers.forEach(user => {
+        socket.emit("call:ended", { to: user.id });
+    });
 
     // Stop all local tracks
     if (myStream) {
       myStream.getTracks().forEach((track) => track.stop());
     }
     setMyStream(null);
-    setRemoteStream(null);
+    setRemoteUsers([]);
     
-    // Reset peer connection
+    // Reset all peer connections
     peer.reset();
-    setPeerConnection(peer.peer); // Update state with new peer instance
     
-    // Navigate back to lobby
     navigate("/");
-  }, [myStream, navigate, remoteSocketId, socket]);
-
-  const handleCallEnded = useCallback(({ from }) => {
-    // If the person who left/ended is the one we are connected to
-    // (Or simpler: just reset remote state if anyone leaves for now, assuming 1:1)
-    if (remoteSocketId === from || !remoteSocketId) { 
-        console.log("Call ended by remote user");
-        setRemoteStream(null);
-        setRemoteSocketId(null);
-        setRemoteName(null);
-        peer.reset();
-        setPeerConnection(peer.peer); // Update state with new peer instance
-    }
-  }, [remoteSocketId]);
+  }, [myStream, navigate, remoteUsers, socket]);
 
   useEffect(() => {
     socket.on("user:joined", handleUserJoined);
@@ -264,6 +221,23 @@ const RoomPage = () => {
     handleCallEnded
   ]);
 
+  useEffect(() => {
+    if (myStream) {
+      remoteUsers.forEach((user) => {
+        const connection = peer.getPeer(user.id);
+        if (connection) {
+          myStream.getTracks().forEach((track) => {
+            const senders = connection.getSenders();
+            const trackAlreadyAdded = senders.some((s) => s.track === track);
+            if (!trackAlreadyAdded) {
+              connection.addTrack(track, myStream);
+            }
+          });
+        }
+      });
+    }
+  }, [myStream, remoteUsers]);
+
   const toggleAudio = useCallback(() => {
     if (myStream) {
       const audioTrack = myStream.getAudioTracks()[0];
@@ -289,15 +263,16 @@ const RoomPage = () => {
       <div className="header">
         <h1 className="app-title">📹 Video Call</h1>
         <div className="status-badge">
-          {remoteSocketId ? (
-            <span className="status-online">🟢 Connected</span>
+          {remoteUsers.length > 0 ? (
+            <span className="status-online">🟢 Connected ({remoteUsers.length})</span>
           ) : (
-            <span className="status-offline">⚪ Waiting for user...</span>
+            <span className="status-offline">⚪ Waiting for others...</span>
           )}
         </div>
       </div>
 
       <div className="video-grid">
+        {/* Local Video */}
         <div className="video-card local-video">
           {myStream && !isVideoOff ? (
             <ReactPlayer
@@ -321,23 +296,26 @@ const RoomPage = () => {
           <div className="video-label">{myName} (You) {isMuted && "(Muted)"}</div>
         </div>
 
-        <div className="video-card remote-video">
-          {remoteStream ? (
-            <ReactPlayer
-              playing
-              height="100%"
-              width="100%"
-              url={remoteStream}
-              className="video-player"
-            />
-          ) : (
-            <div className="video-placeholder">
-              <div className="loader-spinner"></div>
-              <span>Waiting for video...</span>
+        {/* Remote Videos */}
+        {remoteUsers.map((user) => (
+            <div key={user.id} className="video-card remote-video">
+              {user.stream ? (
+                <ReactPlayer
+                  playing
+                  height="100%"
+                  width="100%"
+                  url={user.stream}
+                  className="video-player"
+                />
+              ) : (
+                <div className="video-placeholder">
+                  <div className="loader-spinner"></div>
+                  <span>Connecting...</span>
+                </div>
+              )}
+              <div className="video-label">{user.name || "User"}</div>
             </div>
-          )}
-          <div className="video-label">{remoteName || "Remote User"}</div>
-        </div>
+        ))}
       </div>
 
       <div className="controls-bar">
@@ -364,9 +342,9 @@ const RoomPage = () => {
         )}
       </div>
 
-      {!remoteSocketId && (
+      {remoteUsers.length === 0 && (
         <div className="instructions">
-          <p>Share the Room ID with a friend to start chatting.</p>
+          <p>Share the Room ID with friends to start a group call.</p>
         </div>
       )}
     </div>

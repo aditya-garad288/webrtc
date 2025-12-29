@@ -24,6 +24,14 @@ io.on("connection", (socket) => {
   console.log(`Socket Connected`, socket.id);
   socket.on("room:join", (data) => {
     const { email, room, name } = data;
+    
+    // Check room size (limit to 4)
+    const roomSize = io.sockets.adapter.rooms.get(room)?.size || 0;
+    if (roomSize >= 4) {
+      socket.emit("room:full", { room });
+      return;
+    }
+
     emailToSocketIdMap.set(email, socket.id);
     socketidToEmailMap.set(socket.id, email);
     io.to(room).emit("user:joined", { email, id: socket.id, name });
