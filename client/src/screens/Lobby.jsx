@@ -12,15 +12,6 @@ const LobbyScreen = () => {
   const socket = useSocket();
   const navigate = useNavigate();
 
-  const handleSubmitForm = useCallback(
-    (e) => {
-      e.preventDefault();
-      setLoading(true);
-      socket.emit("room:join", { email, room, name });
-    },
-    [email, room, name, socket]
-  );
-
   const handleJoinRoom = useCallback(
     (data) => {
       const { email, room, name } = data;
@@ -30,19 +21,31 @@ const LobbyScreen = () => {
     [navigate]
   );
 
+  const handleSubmitForm = useCallback(
+    (e) => {
+      e.preventDefault();
+      setLoading(true);
+      // Use acknowledgment callback
+      socket.emit("room:join", { email, room, name }, (data) => {
+          handleJoinRoom(data);
+      });
+    },
+    [email, room, name, socket, handleJoinRoom]
+  );
+
   const handleRoomFull = useCallback(({ room }) => {
     setLoading(false);
     alert(`Room ${room} is full (max 4 users). Please try another room.`);
   }, []);
 
   useEffect(() => {
-    socket.on("room:join", handleJoinRoom);
+    // socket.on("room:join", handleJoinRoom); // Removed in favor of callback
     socket.on("room:full", handleRoomFull);
     return () => {
-      socket.off("room:join", handleJoinRoom);
+      // socket.off("room:join", handleJoinRoom);
       socket.off("room:full", handleRoomFull);
     };
-  }, [socket, handleJoinRoom, handleRoomFull]);
+  }, [socket, handleRoomFull]);
 
   return (
     <div className="lobby-container">

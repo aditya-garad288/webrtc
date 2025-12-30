@@ -22,7 +22,7 @@ const socketidToEmailMap = new Map();
 
 io.on("connection", (socket) => {
   console.log(`Socket Connected`, socket.id);
-  socket.on("room:join", (data) => {
+  socket.on("room:join", (data, callback) => {
     const { email, room, name } = data;
     
     // Check room size (limit to 4)
@@ -36,20 +36,27 @@ io.on("connection", (socket) => {
     socketidToEmailMap.set(socket.id, email);
     io.to(room).emit("user:joined", { email, id: socket.id, name });
     socket.join(room);
-    io.to(socket.id).emit("room:join", data);
+    
+    // Send acknowledgement callback if client provided one
+    if (typeof callback === "function") {
+        callback(data);
+    } else {
+        // Fallback for older clients (if any)
+        io.to(socket.id).emit("room:join", data);
+    }
   });
 
   socket.on("user:welcome", ({ to, email, name }) => {
     io.to(to).emit("user:welcome", { from: socket.id, email, name });
   });
 
-  socket.on("user:call", ({ to, offer }) => {
+  socket.on("user:call", ({ to, offer, name }) => {
     console.log(`Call from ${socket.id} to ${to}`);
-    io.to(to).emit("incomming:call", { from: socket.id, offer });
+    io.to(to).emit("incomming:call", { from: socket.id, offer, name });
   });
 
-  socket.on("call:accepted", ({ to, ans }) => {
-    io.to(to).emit("call:accepted", { from: socket.id, ans });
+  socket.on("call:accepted", ({ to, ans, name }) => {
+    io.to(to).emit("call:accepted", { from: socket.id, ans, name });
   });
 
   socket.on("peer:nego:needed", ({ to, offer }) => {
@@ -64,6 +71,15 @@ io.on("connection", (socket) => {
 
   socket.on("peer:ice-candidate", ({ to, candidate }) => {
     io.to(to).emit("peer:ice-candidate", { from: socket.id, candidate });
+  });
+
+  // State synchronization events
+  socket.on("user:toggle-audio", ({ room, isMuted }) => {
+    socket.to(room).emit("user:toggled-audio", { id: socket.id, isMuted });
+  });
+
+  socket.on("user:toggle-video", ({ room, isVideoOff }) => {
+    socket.to(room).emit("user:toggled-video", { id: socket.id, isVideoOff });
   });
 
   socket.on("call:ended", ({ to }) => {
